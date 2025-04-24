@@ -7,7 +7,7 @@ from pykalman import KalmanFilter
 from scipy.stats.mstats import winsorize
 
 # Define input and output base paths
-INPUT_BASE = "data\\high_frequency_data"
+INPUT_BASE = "data\\high_freq_data"
 OUTPUT_BASE_HP = "data\\filtered_data\\hp"
 OUTPUT_BASE_KF = "data\\filtered_data\\kalman"
 
@@ -34,6 +34,7 @@ def extend_and_ffill(df, freq):
     df['Value'] = df['Value'].ffill()
     return df
 
+
 def replace_outliers_iqr_interpolate(series: pd.Series) -> pd.Series:
     """
     Вариант 1: помечаем выбросы NaN и заполняем линейной интерполяцией
@@ -49,7 +50,7 @@ def replace_outliers_iqr_interpolate(series: pd.Series) -> pd.Series:
     return s.interpolate(method='linear', limit_direction='both')
 
 
-def replace_outliers_iqr_winsorize(series: pd.Series, limits=(0.05, 0.05)) -> pd.Series:
+def replace_outliers_iqr_winsorize(series: pd.Series, limits=(0.1, 0.1)) -> pd.Series:
     """
     Вариант 3: винзоризация — обрезка крайних долей.
     По умолчанию обрезает нижние 5% значений до 5-го перцентиля
@@ -58,6 +59,7 @@ def replace_outliers_iqr_winsorize(series: pd.Series, limits=(0.05, 0.05)) -> pd
     # winsorize возвращает masked array, приводим обратно в Series
     arr = winsorize(series, limits=limits)
     return pd.Series(arr, index=series.index)
+
 
 def replace_outliers_iqr(series):
     """
@@ -87,10 +89,17 @@ def replace_outliers_iqr(series):
     return series
 
 
-def apply_hp_filter(series, lamb=1600):
+def apply_hp_filter(series, freq:str):
     """
     Apply Hodrick-Prescott filter and return the trend (smoothed) component.
     """
+    lamb = 0
+    if freq == 'monthly':
+        lamb = 14400
+    elif freq == 'daily':
+        lamb = 129600
+    else:
+        raise ValueError(f"Unknown frequency - {freq}")
     cycle, trend = hpfilter(series, lamb=lamb)
     return trend
 
@@ -108,25 +117,23 @@ def apply_kalman_filter(series):
 
 def process_frequency(freq):
     input_dir = os.path.join(INPUT_BASE, freq)
-    files = glob.glob(os.path.join(input_dir, '*.csv'))
+    file_path = os.listdir(input_dir)
 
-    for file_path in files:
-        df = pd.read_csv(file_path, parse_dates=['Date'], index_col='Date')
+    for fn in file_path:
+        df = pd.read_csv(f"{input_dir}\\{fn}", parse_dates=['Date'], index_col='Date')
         df = extend_and_ffill(df, freq)
-        df['Value'] = replace_outliers_iqr_interpolate(df['Value'])
+        #df['Value'] = replace_outliers_iqr_interpolate(df['Value'])
 
         # HP Filter
-        trend = apply_hp_filter(df['Value'])
-        hp_df = pd.DataFrame({'Date': trend.index, 'HP_Value': trend.values})
-        hp_file = os.path.join(OUTPUT_BASE_HP, freq,
-                               os.path.basename(file_path).replace('.csv', '_hp.csv'))
+        trend = apply_hp_filter(df['Value'], freq)
+        hp_df = pd.DataFrame({'Date': trend.index, 'Value': trend.values})
+        hp_file = f"{OUTPUT_BASE_HP}\\{freq}\\{fn}"
         hp_df.to_csv(hp_file, index=False)
 
         # Kalman Filter
         kf_series = apply_kalman_filter(df['Value'])
-        kf_df = pd.DataFrame({'Date': kf_series.index, 'KF_Value': kf_series.values})
-        kf_file = os.path.join(OUTPUT_BASE_KF, freq,
-                               os.path.basename(file_path).replace('.csv', '_kf.csv'))
+        kf_df = pd.DataFrame({'Date': kf_series.index, 'Value': kf_series.values})
+        kf_file = f"{OUTPUT_BASE_KF}\\{freq}\\{fn}"
         kf_df.to_csv(kf_file, index=False)
 
         print(f"Processed {file_path} -> HP: {hp_file}, KF: {kf_file}")

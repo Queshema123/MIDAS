@@ -1,120 +1,107 @@
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import TimeSeriesSplit
-from bw_funcs import optimize_theta_metric, beta_weights, get_lags_from_frequency
-import warnings
+from statsmodels.tsa.ar_model import AutoReg
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+from load_data import load_data_to_dict, extract_records_from_date
 
+class MIDAS():
 
-def train_midas_model_tssplit(data_dict, target_variable, n_splits=5):
-    # Фильтрация данных: отделяем целевую переменную и высокочастотные данные
-    lf_df = data_dict[target_variable]['data'].reset_index(drop=True)
-    hf_data = {k: v['data'].reset_index(drop=True) for k, v in data_dict.items() if v['frequency'] != 'quarterly' }
+    def __init__(self, data_folder:str, weights_type:type):
+        self.data_dict = load_data_to_dict(data_folder)
+        self.hf_data = {}
+        self.w_type = weights_type
 
-    # Настройка кросс-валидации
-    T = len(lf_df)
-    window_size = 4
-    n_splits = max(1, T - window_size)
-    tscv = TimeSeriesSplit(n_splits=n_splits, test_size=1, max_train_size=window_size)
+    def get_lags_from_frequency(frequency='monthly'):
+        """
+        Определяет количество лагов в зависимости от частоты данных.
+        Пример: если данные ежемесячные, для прогноза на квартал (3 месяца).
     
-    true_vals, preds = [], []
-    model_params = []
+        Параметры:
+        frequency : str
+            Частота данных. Возможные значения: 'monthly', 'daily'.
+        
+        Возвращает:
+        lags : int
+            Количество лагов для прогноза на квартал.
+        """
+        # Переделать по табличный метод
+        if frequency == 'monthly':
+            return 3  # 3 месяца для квартала
+        elif frequency == 'daily':
+            return 90  # 90 дней для квартала
+        elif frequency == "quarterly":
+            return 1
+        else:
+            raise ValueError("Неподдерживаемая частота данных. Используйте 'monthly' или 'daily'.")
 
-    for train_idx, test_idx in tscv.split(lf_df):
-        lf_train = lf_df.iloc[train_idx]
-        lf_test = lf_df.iloc[test_idx]
+    def prepare_hf_data(self, dict:dict):
+        for name, info in dict.items():
+            if info['frequency'] == 'quarterly':
+                continue
 
-        hf_matrix = {}
-        for metric, df_hf in hf_data.items():
-            X_list = []
-            for dt in pd.to_datetime(lf_train['Date']):
-                end = dt.to_period('Q').end_time
-                n_lags = get_lags_from_frequency(data_dict[metric]['frequency'])
-                window = df_hf[df_hf['Date'] <= end]['Value'].values[-n_lags:]
-                if len(window) < n_lags:
-                    warnings.warn(f"Недостаточно данных для {metric} заполнение пропусков значением NAN", UserWarning)
-                    pad = np.full(n_lags - len(window), np.nan)
-                    window = np.concatenate([pad, window])
-                X_list.append(window)
-            hf_matrix[metric] = np.vstack(X_list)
+            weights = self.w_type(
+                np.array([1.0, 5.0]),
+                info['data']
+            )   
+            self.hf_data[name] = {
+                'frequency': info['frequency'],
+                'weights_obj': weights
+            }
 
-        y_train = lf_train['Value'].values
+    def calc_ar_val(self, Y:np.array, lags=1):
+        model = AutoReg(Y, lags=lags, trend='n').fit()
+        return sum(model.params * Y[-lags:])
 
-        # Оптимизация параметров theta для каждой HF-метрики
-        theta_params = {
-            metric: optimize_theta_metric(X, y_train)
-            for metric, X in hf_matrix.items()
+    def calc_arima_val(self, Y:np.array, order:tuple = (1, 1, 1)):
+        model = ARIMA(Y, order=order).fit()
+        return sum(model.arparams * Y[-order[0]:][::-1]) # Берем последние значения и перечисляем их с конца
+
+    def train(self, start_date:str, target_var:str, n_splits:int = 10, test_size:int = 1):
+        extract_data_dict = extract_records_from_date(self.data_dict, start_date, target_var)
+        lf_df = extract_data_dict[target_var]['data'].reset_index(drop=True)
+        self.prepare_hf_data(extract_data_dict)
+
+        tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size)
+        predicted, vals, dates = [], [], []
+
+        for train_idx, test_idx in tscv.split(lf_df):
+            lf_train = lf_df.iloc[train_idx]
+            lf_test = lf_df.iloc[test_idx]
+            ar_val = self.calc_ar_val(lf_train['Value'].values, 1)
+            for opt_w_obj in (v['weights_obj'] for v in self.hf_data.values()):
+                forecastes = []
+                for i in train_idx:
+                    end = pd.to_datetime(lf_train['Date'][i])
+                    start = end.to_period('Q').start_time
+                    forecast = ar_val
+                    for w_obj in (v['weights_obj'] for v in self.hf_data.values() if v['weights_obj'] != opt_w_obj):
+                        forecast += w_obj.calc_sum(start, end)
+                    forecastes.append(forecast)
+
+                opt_w_obj.optimize_theta(start, end, lf_train['Value'].values, forecastes)
+
+            
+            for i in test_idx:
+                end = pd.to_datetime(lf_test['Date'][i])
+                start = end.to_period('Q').start_time
+                y = lf_test['Value'][i]
+                forecast = ar_val
+                for w_obj in (v['weights_obj'] for v in self.hf_data.values()):
+                    forecast += w_obj.calc_sum(start, end)
+
+                predicted.append(forecast)
+                vals.append(y)
+                dates.append(end)
+
+        self.train_results =  {
+            'MAE'      : mean_absolute_error( vals, predicted ),
+            'RMSE'     : np.sqrt(mean_squared_error( vals, predicted )), 
+            'dates'    : dates,
+            'vals'     : vals,
+            'forecast' : predicted
         }
 
-        # Прогноз для тестовой точки
-        forecast = 0.0
-        for metric, df_hf in hf_data.items():
-            dt = pd.to_datetime(lf_test['Date'].iloc[0])
-            end = dt.to_period('Q').end_time
-            n_lags = get_lags_from_frequency(data_dict[metric]['frequency'])
-            window = df_hf[df_hf['Date'] <= end]['Value'].values[-n_lags:]
-            if len(window) < n_lags:
-                pad = np.full(n_lags - len(window), np.nan)
-                window = np.concatenate([pad, window])
-            X_test = window.reshape(1, -1)
-
-            j = np.arange(1, n_lags + 1)
-            t1 = theta_params[metric]['theta1']
-            t2 = theta_params[metric]['theta2']
-            w = beta_weights(j, t1, t2, n_lags)
-            forecast += (X_test * w).sum()
-
-        true_vals.append(lf_test['Value'].iloc[0])
-        preds.append(forecast)
-
-        # Сохраняем параметры модели и веса
-        weights = {
-            m: beta_weights(np.arange(1, n_lags + 1), p['theta1'], p['theta2'], n_lags)
-            for m, p in theta_params.items()
-        }
-        model_params.append({
-            'train_end': pd.to_datetime(lf_train['Date'].iloc[-1]).to_period('Q').end_time,
-            'theta': theta_params,
-            'weights': weights
-        })
-
-    metrics = {
-        'MAE': mean_absolute_error(true_vals, preds),
-        'RMSE': np.sqrt(mean_squared_error(true_vals, preds)),
-        'true': true_vals,
-        'predicted': preds
-    }
-    return model_params, metrics
-
-
-def forecast_next_quarter_from_model(data_dict: dict, trained_model, target_var: str = 'GDP') -> pd.DataFrame:
-    """
-    Выполняет прогноз на следующий квартал целевой переменной,
-    используя переданный словарь данных и уже обученную модель MIDAS.
-
-    :param data_dict: словарь серий {'daily': ..., 'monthly': ..., 'quarterly': ..., target_var: Series/DF}
-    :param trained_model: обученный объект модели MIDAS с методом predict(horizon)
-    :param target_var: имя целевой переменной, например 'GDP'
-    :return: DataFrame с одним значением прогноза по дате следующего квартала
-    """
-    # Получаем серию квартальных наблюдений целевой переменной
-    series = data_dict[target_var]
-
-    # Проверим, что серия индексирована датами
-    if not isinstance(series.index, pd.DatetimeIndex):
-        raise ValueError("Индекс серии должен быть DatetimeIndex с квартальными датами")
-
-    # Выполняем прогноз на следующий квартал
-    forecast_values = trained_model.predict(horizon=1)
-
-    # Определяем дату конца следующего квартала
-    last_date = series.index[-1]
-    next_quarter_date = last_date + pd.offsets.QuarterEnd()
-
-    # Формируем DataFrame с прогнозом
-    df_forecast = pd.DataFrame({
-        'Date': [next_quarter_date],
-        f'{target_var}_forecast': forecast_values
-    }).set_index('Date')
-
-    return df_forecast
+    def forecast(self):
+        pass

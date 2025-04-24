@@ -1,31 +1,37 @@
+import warnings
 import pandas as pd
-import os
-from statsmodels.tsa.filters.hp_filter import hpfilter
+from statsmodels.tsa.arima.model import ARIMA
 
-# Папка с исходными CSV-файлами
-input_folder = 'data/high_freq_data/daily'
-output_folder = 'data/high_freq_data/daily_filtered'
-os.makedirs(output_folder, exist_ok=True)
+# Загрузка ряда
+df = pd.read_csv("data\\low_freq_data\\GDP.csv", parse_dates=["Date"], index_col="Date")
+ts = df["Value"]
 
-# Параметр lambda для monthly данных
-hp_lambda = 14400  # 1600 - MS 14400 -D
+# 1) Ручная проверка
+for order in [(1,1,1), (2,1,0), (1,2,1), (2,1,2)]:
+    try:
+        m = ARIMA(ts, order=order,
+                  enforce_stationarity=False,
+                  enforce_invertibility=False).fit()
+        print(f"order={order} → AIC={m.aic:.2f}")
+    except Exception as e:
+        print(f"order={order} → error: {e}")
 
-for filename in os.listdir(input_folder):
-    if filename.endswith('.csv'):
-        file_path = os.path.join(input_folder, filename)
-        df = pd.read_csv(file_path)
+# 2) Grid search по p,d,q (например, p=0..3, d=0..2, q=0..3)
+best_aic = float("inf")
+best_cfg = None
 
-        # Преобразование даты
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.sort_values('Date')
+warnings.filterwarnings("ignore")  # подавим предупреждения старта
+for p in range(4):
+    for d in range(3):
+        for q in range(4):
+            order = (p, d, q)
+            try:
+                m = ARIMA(ts, order=order,
+                          enforce_stationarity=False,
+                          enforce_invertibility=False).fit()
+                if m.aic < best_aic:
+                    best_aic, best_cfg = m.aic, order
+            except:
+                continue
 
-        # Применение HP фильтра
-        cycle, trend = hpfilter(df['Value'], lamb=hp_lambda)
-        df['Value'] = trend
-        df['HP_Cycle'] = cycle
-
-        # Сохранение
-        output_path = os.path.join(output_folder, filename)
-        df.to_csv(output_path, index=False)
-
-        print(f"✔ Файл обработан: {filename}")
+print(f"\nЛучший order={best_cfg} с AIC={best_aic:.2f}")
