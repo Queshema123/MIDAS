@@ -11,10 +11,15 @@ class Weights():
         self.weights = []
 
     def calc_weights(self, J):
-        pass
+        self.weights = np.ones(J)
     
+    def extract_data(self, start:pd.DatetimeIndex, end:pd.DatetimeIndex):
+        return self.data.loc[ (self.data['Date']>= start) & (self.data['Date'] <= end), 'Value' ].to_numpy()
+
     def calc_sum(self, start:pd.DatetimeIndex, end:pd.DatetimeIndex):
-        pass
+        extr_data = self.extract_data(start, end)
+        self.calc_weights( len(extr_data) )
+        return (extr_data * self.weights).sum()
 
     def mse_loss(self, th:np.array, start:pd.DatetimeIndex, end:pd.DatetimeIndex, true_val:float, forecast_val:float):
         pass

@@ -58,18 +58,19 @@ class MIDAS():
         model = ARIMA(Y, order=order).fit()
         return sum(model.arparams * Y[-order[0]:][::-1]) # Берем последние значения и перечисляем их с конца
 
-    def train(self, start_date:str, target_var:str, n_splits:int = 10, test_size:int = 1):
+    def train(self, start_date:str, target_var:str, n_splits:int = 15, test_size:int = 1):
         extract_data_dict = extract_records_from_date(self.data_dict, start_date, target_var)
         lf_df = extract_data_dict[target_var]['data'].reset_index(drop=True)
+        lf_df = lf_df.drop(lf_df.index[-1]) # Удаление последнего значения 
         self.prepare_hf_data(extract_data_dict)
 
-        tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size)
+        tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size, max_train_size=5)
         predicted, vals, dates = [], [], []
 
         for train_idx, test_idx in tscv.split(lf_df):
             lf_train = lf_df.iloc[train_idx]
             lf_test = lf_df.iloc[test_idx]
-            ar_val = self.calc_ar_val(lf_train['Value'].values, 1)
+            ar_val = 0#self.calc_ar_val(lf_train['Value'].values, 1)
             for opt_w_obj in (v['weights_obj'] for v in self.hf_data.values()):
                 forecastes = []
                 for i in train_idx:
@@ -103,5 +104,13 @@ class MIDAS():
             'forecast' : predicted
         }
 
-    def forecast(self):
-        pass
+    def forecast(self, date:str, var:str) -> float:
+        date = pd.to_datetime(date)
+        q_start, q_end =  date.to_period('Q').start_time, date.to_period('Q').end_time
+        extr_data = extract_records_from_date(self.data_dict, q_start, var)
+        self.prepare_hf_data(extr_data)
+        forecast = 0
+        for w_obj in (v['weights_obj'] for v in self.hf_data.values()):
+            forecast += w_obj.calc_sum(q_start, q_end)
+        return {'forecast': forecast, 'value': extr_data[var]['data'].iloc[-1]}
+

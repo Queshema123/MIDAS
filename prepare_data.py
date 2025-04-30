@@ -7,7 +7,7 @@ from pykalman import KalmanFilter
 from scipy.stats.mstats import winsorize
 
 # Define input and output base paths
-INPUT_BASE = "data\\high_freq_data"
+INPUT_BASE = "data"
 OUTPUT_BASE_HP = "data\\filtered_data\\hp"
 OUTPUT_BASE_KF = "data\\filtered_data\\kalman"
 
