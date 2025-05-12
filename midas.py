@@ -77,16 +77,50 @@ class MIDAS():
 
     def get_season_coeff(self, date:pd.Timestamp):
         return self.quarter_coeff.get(date.quarter, 1)
-        
-    def train(self, start_date:str, target_var:str, n_splits:int = 15, test_size:int = 1):
+
+    def optimize_time_series_split(self, n_samples: int, test_size: int) -> tuple:
+        """
+        Подбирает параметры n_splits и max_train_size для TimeSeriesSplit.
+
+        Аргументы:
+            n_samples (int): Общее количество наблюдений.
+            test_size (int): Желаемый размер тестового набора в каждом разбиении.
+
+        Возвращает:
+            tuple: (n_splits, max_train_size)
+        """
+        if test_size <= 0 or test_size >= n_samples:
+            raise ValueError("test_size должен быть > 0 и меньше n_samples.")
+
+        # Рассчитываем n_splits
+        n_splits = (n_samples - test_size) // test_size
+        n_splits = max(n_splits, 1)  # Минимум 1 разбиение
+
+        # Рассчитываем max_train_size
+        max_train_size = n_samples - test_size * (n_splits + 1)
+
+        # Если max_train_size некорректен, уменьшаем n_splits
+        while max_train_size <= 0 and n_splits > 1:
+            n_splits -= 1
+            max_train_size = n_samples - test_size * (n_splits + 1)
+
+        # Если после коррекции все равно неверно, используем все данные
+        if max_train_size <= 0:
+            max_train_size = None
+
+        return n_splits, max_train_size
+
+    def train(self, start_date:str, target_var:str, test_size:int = 1):
         extract_data_dict = extract_records_from_date(self.data_dict, start_date, target_var)
         lf_df = extract_data_dict[target_var]['data'].reset_index(drop=True)
         #lf_df = lf_df.drop(lf_df.index[-1]) # Удаление последнего значения 
         self.prepare_hf_data(extract_data_dict)
 
+        n_splits, max_train_size = self.optimize_time_series_split(len(lf_df['Value']), test_size)
+        print(f"splits = {n_splits}, mts = {max_train_size}, ts = {test_size}")
         # Разбиваем данные на отрезок от 1 квартала до t, тестируем на t+test_size кварталах
         # После подсчета ошибок добавляем в обучающую выборку тестовую. Отрезок - [1, t+test_size]
-        tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size, max_train_size=5)
+        tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size, max_train_size=max_train_size)
         predicted, vals, dates = [], [], []
 
         for train_idx, test_idx in tscv.split(lf_df):
