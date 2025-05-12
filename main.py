@@ -3,7 +3,7 @@ from weights import BetaWeights, AlmonExpPolyWeights, AlmonPolynomialWeights, We
 from matplotlib import pyplot as plt
 
 if __name__ == "__main__":
-    folder_path = "data" 
+    folder_path = "data\\filtered_data\\stl" 
     model = MIDAS(folder_path, AlmonExpPolyWeights)
     model.train('2019-03-31', 'GDP')
     print(f"Результаты обучения\nMAE: {model.train_results['MAE']}\nRMSE: {model.train_results['RMSE']}")
@@ -11,5 +11,4 @@ if __name__ == "__main__":
     plt.plot(model.train_results['dates'], model.train_results['forecast'])
     plt.legend()
     plt.show()
-    # print( model.forecast('2024-09-30', 'GDP') )
     input()

@@ -3,15 +3,18 @@ import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 from statsmodels.tsa.ar_model import AutoReg
 from statsmodels.tsa.arima.model import ARIMA
+from scipy.optimize import minimize
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from load_data import load_data_to_dict, extract_records_from_date
 
 class MIDAS():
 
-    def __init__(self, data_folder:str, weights_type:type):
+    def __init__(self, data_folder:str, weights_type:type, seasons_coeff:dict = { 1 : 0.91, 2 : 0.96, 3 : 1.025, 4 : 1.1 }):
         self.data_dict = load_data_to_dict(data_folder)
         self.hf_data = {}
         self.w_type = weights_type
+        self.lf_coeffs = []
+        self.quarter_coeff = seasons_coeff
 
     def get_lags_from_frequency(frequency='monthly'):
         """
@@ -36,6 +39,20 @@ class MIDAS():
         else:
             raise ValueError("Неподдерживаемая частота данных. Используйте 'monthly' или 'daily'.")
 
+    def mse_loss(self, thetas, true_vals, data, summary):
+        self.lf_coeffs = thetas
+        predicted = summary + np.sum(data*self.lf_coeffs)
+        return np.mean((true_vals-predicted)**2)
+
+    def optimize_lf_coeff(self, true_vals, data, summary):
+        self.lf_coeffs = np.zeros(len(data))
+        res = minimize(
+            fun = self.mse_loss,
+            x0 = self.lf_coeffs,
+            args = (true_vals, data, summary)
+        )
+        self.lf_coeffs = res.x
+
     def prepare_hf_data(self, dict:dict):
         for name, info in dict.items():
             if info['frequency'] == 'quarterly':
@@ -58,39 +75,52 @@ class MIDAS():
         model = ARIMA(Y, order=order).fit()
         return sum(model.arparams * Y[-order[0]:][::-1]) # Берем последние значения и перечисляем их с конца
 
+    def get_season_coeff(self, date:pd.Timestamp):
+        return self.quarter_coeff.get(date.quarter, 1)
+        
     def train(self, start_date:str, target_var:str, n_splits:int = 15, test_size:int = 1):
         extract_data_dict = extract_records_from_date(self.data_dict, start_date, target_var)
         lf_df = extract_data_dict[target_var]['data'].reset_index(drop=True)
-        lf_df = lf_df.drop(lf_df.index[-1]) # Удаление последнего значения 
+        #lf_df = lf_df.drop(lf_df.index[-1]) # Удаление последнего значения 
         self.prepare_hf_data(extract_data_dict)
 
+        # Разбиваем данные на отрезок от 1 квартала до t, тестируем на t+test_size кварталах
+        # После подсчета ошибок добавляем в обучающую выборку тестовую. Отрезок - [1, t+test_size]
         tscv = TimeSeriesSplit(n_splits=n_splits, test_size=test_size, max_train_size=5)
         predicted, vals, dates = [], [], []
 
         for train_idx, test_idx in tscv.split(lf_df):
             lf_train = lf_df.iloc[train_idx]
             lf_test = lf_df.iloc[test_idx]
-            ar_val = 0#self.calc_ar_val(lf_train['Value'].values, 1)
+            # Подбираем параметры тета для высокочастотных переменных. Фиксируем одну метрику с коэффициентами для оптимизации
             for opt_w_obj in (v['weights_obj'] for v in self.hf_data.values()):
                 forecastes = []
-                for i in train_idx:
+                # Проходимся по всему тренировочном кварталам
+                for i in train_idx: 
                     end = pd.to_datetime(lf_train['Date'][i])
                     start = end.to_period('Q').start_time
-                    forecast = ar_val
+                    coeff = self.get_season_coeff(start)
+                    forecast = 0
+                    # Вычисляем суммы всех метрик кроме оптимизируемой
                     for w_obj in (v['weights_obj'] for v in self.hf_data.values() if v['weights_obj'] != opt_w_obj):
-                        forecast += w_obj.calc_sum(start, end)
+                        forecast += w_obj.calc_sum(start, end) * coeff
                     forecastes.append(forecast)
-
+                # Оптимизируем значения параметров под вычисленные прогнозы
                 opt_w_obj.optimize_theta(start, end, lf_train['Value'].values, forecastes)
 
-            
+            # Вычисление тета для исторических значений target_var
+            self.optimize_lf_coeff(lf_train['Value'].values, lf_train['Value'].values, forecastes) 
+
+            # Пронозируем на обученных параметрах
             for i in test_idx:
                 end = pd.to_datetime(lf_test['Date'][i])
                 start = end.to_period('Q').start_time
                 y = lf_test['Value'][i]
-                forecast = ar_val
+                forecast = 0
+                coeff = self.get_season_coeff(start)
                 for w_obj in (v['weights_obj'] for v in self.hf_data.values()):
-                    forecast += w_obj.calc_sum(start, end)
+                    forecast += w_obj.calc_sum(start, end) * coeff
+                forecast += np.sum(lf_train['Value'].values * self.lf_coeffs) 
 
                 predicted.append(forecast)
                 vals.append(y)

@@ -61,33 +61,20 @@ def replace_outliers_iqr_winsorize(series: pd.Series, limits=(0.1, 0.1)) -> pd.S
     return pd.Series(arr, index=series.index)
 
 
-def replace_outliers_iqr(series):
-    """
-    Identify outliers based on IQR and replace each outlier
-    with the median of its nearest non-outlier neighbors.
-    """
-    q1 = series.quantile(0.25)
-    q3 = series.quantile(0.75)
-    iqr = q3 - q1
-    lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+def clip_with_iqr(data):
+    Q1 = np.percentile(data, 25)
+    Q3 = np.percentile(data, 75)
+    IQR = Q3 - Q1
+    lower = Q1 - 1.5 * IQR
+    upper = Q3 + 1.5 * IQR
+    return np.clip(data, lower, upper)
 
-    outliers = (series < lower) | (series > upper)
-    clean = series[~outliers]
-    for idx in series[outliers].index:
-        # find neighbors
-        prev_vals = clean[:idx]
-        next_vals = clean[idx:]
-        if not prev_vals.empty and not next_vals.empty:
-            rep = np.median([prev_vals.iloc[-1], next_vals.iloc[0]])
-        elif not prev_vals.empty:
-            rep = prev_vals.iloc[-1]
-        elif not next_vals.empty:
-            rep = next_vals.iloc[0]
-        else:
-            rep = series[idx]
-        series.at[idx] = rep
-    return series
 
+def clip_with_zscore(data, threshold=3):
+    mean = np.mean(data)
+    std = np.std(data)
+    clipped = np.clip(data, mean - threshold*std, mean + threshold*std)
+    return clipped
 
 def apply_hp_filter(series, freq:str):
     """
