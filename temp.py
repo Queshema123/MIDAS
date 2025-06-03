@@ -1,47 +1,32 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# 1) Загрузка ряда (предполагаем квартальные данные GDP)
-df = pd.read_csv("data\\low_freq_data\\GDP.csv", )
+stl_df = pd.read_csv("data\\filtered_data\\stl\\daily\\Курс_Рубля_к_Доллару.csv", parse_dates=["Date"], index_col='Date')
+nf_df = pd.read_csv("data\\daily\\Курс_Рубля_к_Доллару.csv", parse_dates=["Date"], index_col='Date')
+kalman_df = pd.read_csv("data\\filtered_data\\kalman\\daily\\Курс_Рубля_к_Доллару.csv", parse_dates=["Date"], index_col='Date')
+hp_df = pd.read_csv("data\\filtered_data\\hp\\daily\\Курс_Рубля_к_Доллару.csv", parse_dates=["Date"], index_col='Date')
 
-df['Date'] = pd.to_datetime(df['Date'])
-df.set_index('Date', inplace=True)
+stl_df['Value'] = stl_df['Value'].astype(float)
+nf_df['Value'] = nf_df['Value'].astype(float)
+kalman_df['Value'] = kalman_df['Value'].astype(float)
+hp_df['Value'] = hp_df['Value'].astype(float)
 
-plt.plot(df['Value'], marker='o')
+fig, ax = plt.subplots(2, 2)
 
-plt.show()
+ax[0, 0].plot(nf_df['Value'], label='Исходные данные')
+ax[0, 0].plot(stl_df['Value'], label='STL разложение')
+ax[0, 0].legend()
+ax[0, 0].grid(True)
 
-df.index = df.index.to_period('Q')
-df['Quarter'] = df.index.quarter
-df['Year'] = df.index.year
+ax[0, 1].plot(nf_df['Value'], label='Исходные данные')
+ax[0, 1].plot(kalman_df['Value'], label='Фильтр Калмана')
+ax[0, 1].legend()
+ax[0, 1].grid(True)
 
-# Создаём сводную таблицу: строки — кварталы, столбцы — годы
-pivot = df.pivot_table(index='Quarter', columns='Year', values='Value')
+ax[1, 0].plot(nf_df['Value'], label='Исходные данные')
+ax[1, 0].plot(hp_df['Value'], label='Фильтр Ходрика-Прескотта')
+ax[1, 0].legend()
+ax[1, 0].grid(True)
 
-# Определяем последние 5 годов
-last_years = sorted(pivot.columns)[-5:]   # при условии, что годы упорядочены численно
-
-# Фильтруем таблицу по последним 5 годам
-pivot_last5 = pivot[last_years]
-
-# Рисуем линии для каждого из последних 5 лет
-fig, ax = plt.subplots(figsize=(6,4))
-for year in pivot_last5.columns:
-    ax.plot(
-        pivot_last5.index, 
-        pivot_last5[year], 
-        marker='o', 
-        label=str(year)
-    )
-
-# Настраиваем ось X и подписи
-ax.set_xticks([1,2,3,4])
-ax.set_xticklabels(['Q1','Q2','Q3','Q4'])
-ax.set_xlabel('Квартал')
-ax.set_ylabel('Value')
-ax.set_title('Сезонный паттерн квартальных значений за последние 5 лет')
-ax.legend(title='Год')
-ax.grid(True)
-
-plt.tight_layout()
-plt.show()
+fig.delaxes(ax[1, 1])
+input()

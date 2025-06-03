@@ -69,7 +69,6 @@ def clip_with_iqr(data):
     upper = Q3 + 1.5 * IQR
     return np.clip(data, lower, upper)
 
-
 def clip_with_zscore(data, threshold=3):
     mean = np.mean(data)
     std = np.std(data)

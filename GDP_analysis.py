@@ -1,22 +1,51 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 from pykalman import KalmanFilter
+import numpy as np
 from statsmodels.tsa.stattools import adfuller, kpss
 from statsmodels.tsa.seasonal import STL
 from statsmodels.tsa.filters.hp_filter import hpfilter
 from statsmodels.tsa.seasonal import seasonal_decompose
-
+from prepare_data import clip_with_iqr, clip_with_zscore
 # Загрузка
 df = pd.read_csv("data\\low_freq_data\\GDP.csv", parse_dates=["Date"], index_col="Date")
 df['Value'] = df['Value'].astype(float)
 ts = df['Value']
 
-res = seasonal_decompose(x=df['Value'], model='multiplicative')
-season = res.seasonal
+df['diff'] = df['Value'].diff(4).diff()
+df['log'] = np.log(df['Value'])
+fig, axes = plt.subplots(1, 2, figsize=(8, 8))
+axes[0].plot(df['diff'], label='Diff')
+axes[0].set_title('Дифференцирование')
+axes[0].legend()
+axes[0].grid(True)
 
-plt.plot(season, marker='o', label='Сезонность')
-plt.grid(True)
-plt.legend()
+axes[1].plot(df['log'], label='Log')
+axes[1].set_title('Логарифмирование')
+axes[1].legend()
+axes[1].grid(True)
+
+plt.show()
+
+df['iqr'] = clip_with_iqr(df['Value'])
+df['z']   = clip_with_zscore(df['Value'])
+print('____________________________________________________________________________')
+print(df['Value'] - df['iqr'])
+print('____________________________________________________________________________')
+print(df['Value'] - df['z'])
+print('____________________________________________________________________________')
+
+fig, axes = plt.subplots(1, 1, figsize=(8, 8))
+axes[0].plot(df['iqr'], label='IQR')
+axes[0].plot(df['Value'], label='ВВП')
+axes[0].set_title('IQR')
+axes[0].legend()
+
+axes[1].plot(df['z'], label='Z-оценка')
+axes[1].plot(df['Value'], label='ВВП')
+axes[1].set_title('Z-оценка')
+axes[1].legend()
+
 plt.show()
 
 '''
@@ -45,13 +74,7 @@ print(f'KPSS: {kpss_result[0]}, p-value: {kpss_result[3]}')
 print('____________________________________________________________________________')
 
 hp = hpfilter(df['Value'], 1600)
-df['STL'] = stl.trend
-
-plt.plot(df['Value'], label='Искомые значения')
-plt.plot(df['STL'], label='Тренд')
-plt.legend()
-plt.show()
-
+df['STL'] = ts - res.resid
 df['HP'] = hp[1]
 df['Kalman'] = kf.filter(df['Value'])[0].flatten()
 

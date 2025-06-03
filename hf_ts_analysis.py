@@ -21,7 +21,6 @@ for path in freqs_path:
         ts = df['Value']
         
         stl = STL(df['Value'], period = f).fit()
-        print(file)
         adf = adfuller(stl.resid)
         kp  = kpss(stl.resid)
 
