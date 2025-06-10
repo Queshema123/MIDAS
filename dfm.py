@@ -1,5 +1,7 @@
 import statsmodels.api as sm
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 from functools import reduce
 from load_data import load_data_to_dict
 
@@ -9,11 +11,6 @@ data_dict = load_data_to_dict("data\\filtered_data\\stl")
 hf_series = []
 # Возможно для индексов стоит брать средний показатель за период, а не суммировать его
 for name, meta in data_dict.items():
-    '''
-    if meta['frequency'] == 'quarterly':
-        continue
-    '''
-
     df = meta['data'].copy()
     df = df.set_index('Date')
     df = df.resample('QE').sum()
@@ -21,34 +18,49 @@ for name, meta in data_dict.items():
     hf_series.append(df)
 
 # Объединение по дате
-df_hf = reduce(lambda left, right: pd.merge(left, right, left_index=True, right_index=True, how='inner'), hf_series)
+df_all = reduce(lambda left, right: pd.merge(left, right, left_index=True, right_index=True, how='inner'), hf_series)
 
 # (необязательно) Заполним пропуски — например, интерполяцией
-df_hf = df_hf.interpolate(method='linear')
+df_all = df_all.interpolate(method='linear')
 
-df_const = pd.DataFrame({"const": 1}, index=df_hf.index)
-model = sm.tsa.DynamicFactor(endog=df_hf, exog=df_const, k_factors=2, factor_order=3)
+df_const = pd.DataFrame({"const": 1}, index=df_all.index)
 
-result_ex = model.fit(method="lbfgs", maxiter=200, disp=True)
+endog_train = df_all.iloc[:-3]
+exog_train  = df_const.iloc[:-3]
+exog_future = df_const.loc['2024-03-31':'2024-09-30']
 
-# Проверка: intercept (“gamma.GDP”) должен быть ≈ среднему GDP
-print("Mean GDP history:", df_hf["GDP"].mean())
-print("gamma.GDP:", result_ex.params.get("gamma.GDP"))
+model = sm.tsa.DynamicFactor(endog=endog_train, exog=exog_train, k_factors=2, factor_order=3)
+result = model.fit(method="lbfgs", disp=True)
 
-# --- 4. Строим exog_future на 4 квартала вперёд ---
-last_date   = df_hf.index[-1]  # например, 2024-09-30
-future_index = pd.date_range(
-    start=last_date + pd.offsets.QuarterEnd(), 
-    periods=4, 
-    freq="QE-DEC"
-)
-exog_future = pd.DataFrame({"const": 1}, index=future_index)
+actual = df_all["GDP"]
+pred = result.get_prediction(end='2024-09-30', exog=exog_future)  
+fitted = pred.predicted_mean["GDP"]
 
-# --- 5. Прогнозируем с передачей exog_future ---
-forecast_ex = result_ex.get_forecast(steps=4, exog=exog_future)
+y_true = actual.tail(3)
+y_pred = fitted.tail(3)
 
-print("\nПрогноз GDP (сырые единицы):")
-print(forecast_ex.predicted_mean["GDP"])
+# 2. Расчет метрик «вручную» через numpy/pandas
+errors        = y_pred - y_true
+abs_errors    = errors.abs()
+rel_errors    = abs_errors / y_true
+squared_errors = errors.pow(2)
 
-print("\n95%-й доверительный интервал для GDP:")
-print(forecast_ex.conf_int()[["lower GDP", "upper GDP"]])
+mae_manual  = abs_errors.mean()
+rmse_manual = np.sqrt(squared_errors.mean())
+mape_manual = (abs_errors / y_true).mean() * 100
+
+print(f"MAE (manual)  = {mae_manual:.4f}")
+print(f"RMSE (manual) = {rmse_manual:.4f}")
+print(f"MAPE (manual) = {mape_manual:.2f}%")
+print(f"abs = {abs_errors}, rel = {rel_errors}%")
+
+plt.figure(figsize=(10, 5))
+plt.grid(True)
+plt.plot(actual.index, actual.values, label="ВВП",     marker='o')
+plt.plot(fitted.index, fitted.values, label="DFM", marker='o')
+plt.title("Результаты")
+plt.xlabel("Дата")
+plt.ylabel("ВВП")
+plt.legend()
+plt.grid(True)
+plt.show()

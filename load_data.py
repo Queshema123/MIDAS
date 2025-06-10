@@ -55,13 +55,15 @@ def load_data_to_dict(folder_path):
 
     return data_dict
 
-def extract_records_from_date(data_dict, start_date, target_metric_name):
+def extract_records_from_date(data_dict, start_date, target_metric_name, end_date:str=None):
     """
     Извлекает данные, автоматически определяя start_date для высокочастотных данных 
     как начало квартала указанной даты конца квартала для ВВП.
     """
     extracted_data = {}
     start_date = pd.to_datetime(start_date)
+    if end_date:
+        end_date = pd.to_datetime(end_date)
 
     # Вычисляем начало квартала для стартовой даты
     start_of_quarter = start_date.to_period("Q").start_time
@@ -81,6 +83,9 @@ def extract_records_from_date(data_dict, start_date, target_metric_name):
         # Для ВВП используем исходный start_date, для остальных - начало квартала
         filter_date = start_date if metric == target_metric_name else start_of_quarter
         mask = (df['Date'] >= filter_date)
+        if end_date:
+            mask &= (df['Date'] <= end_date)
+        
         extracted_df = df.loc[mask]
 
         if extracted_df.empty:
@@ -90,7 +95,5 @@ def extract_records_from_date(data_dict, start_date, target_metric_name):
             'frequency': info['frequency'],
             'data': extracted_df[['Date', 'Value']].reset_index(drop=True)
         }
-
-        #print(f"[DEBUG] {metric}: {len(extracted_df)} samples, {extracted_df['Date'].min().date()} - {extracted_df['Date'].max().date()}")
 
     return extracted_data

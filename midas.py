@@ -120,10 +120,13 @@ class MIDAS():
 
         return n_splits, max_train_size
 
-    def train(self, start_date:str, target_var:str, test_size:int = 1):
+    def train(self, start_date:str, target_var:str, test_size:int = 1, end_date: str = None):
         extract_data_dict = extract_records_from_date(self.data_dict, start_date, target_var)
-        lf_df = extract_data_dict[target_var]['data'].reset_index(drop=True)
-        #lf_df = lf_df.drop(lf_df.index[-1]) # Удаление последнего значения 
+        lf_df = extract_data_dict[target_var]['data']
+        if end_date:
+            lf_df = lf_df[lf_df['Date'] <= pd.to_datetime(end_date)]
+        lf_df = lf_df.reset_index(drop=True)
+
         self.prepare_hf_data(extract_data_dict)
 
         n_splits, max_train_size = self.optimize_time_series_split(len(lf_df['Value']), test_size)
@@ -178,10 +181,13 @@ class MIDAS():
             'forecast' : predicted
         }
 
-    def window_train(self, start_date:str, target_var:str, train_size:int = 4, test_size:int = 4, step:int = 1):
+    def window_train(self, start_date:str, target_var:str, train_size:int = 4, test_size:int = 4, step:int = 1, end_date:str = None):
         extract_data_dict = extract_records_from_date(self.data_dict, start_date, target_var)
-        lf_df = extract_data_dict[target_var]['data'].reset_index(drop=True)
-        #lf_df = lf_df.drop(lf_df.index[-1]) # Удаление последнего значения 
+        lf_df = extract_data_dict[target_var]['data']
+
+        if end_date:
+            lf_df = lf_df[lf_df['Date'] <= pd.to_datetime(end_date)]
+        lf_df = lf_df.reset_index(drop=True)
         self.prepare_hf_data(extract_data_dict)
 
         predicted, vals, dates = [], [], []
@@ -221,7 +227,7 @@ class MIDAS():
                 coeff = self.get_season_coeff(start)
                 for w_obj in (v['weights_obj'] for v in self.hf_data.values()):
                     forecast += w_obj.calc_sum(start, end) * coeff
-                forecast += np.sum(lf_train['Value'].values * self.lf_coeffs) 
+                forecast += np.sum(lf_train['Value'].values * self.lf_coeffs)
 
                 predicted.append(forecast)
                 vals.append(y)
@@ -236,13 +242,25 @@ class MIDAS():
             'forecast' : predicted
         }
 
-    def forecast(self, date:str, var:str) -> float:
-        date = pd.to_datetime(date)
-        q_start, q_end =  date.to_period('Q').start_time, date.to_period('Q').end_time
-        extr_data = extract_records_from_date(self.data_dict, q_start, var)
-        self.prepare_hf_data(extr_data)
-        forecast = 0
-        for w_obj in (v['weights_obj'] for v in self.hf_data.values()):
-            forecast += w_obj.calc_sum(q_start, q_end)
-        return {'forecast': forecast, 'value': extr_data[var]['data'].iloc[-1]}
+    def forecast(self, var:str, start_date:str, end_date:str):
+        start_date, end_date = pd.to_datetime(start_date).to_period('Q').end_time, pd.to_datetime(end_date).to_period('Q').end_time
+        quarters = pd.date_range(start=start_date, end=end_date, freq='QE-DEC')
 
+        lf_df = self.data_dict[var]['data']
+
+        self.forecast_result = { }
+        self.forecast_result['forecast'] = pd.DataFrame(columns=['Date', 'Value'])
+
+        for dt in quarters:
+            season_coeff = self.get_season_coeff(dt)
+            qs, qe = dt.to_period('Q').start_time, dt.to_period('Q').end_time
+            forecast = 0
+            for w_obj in (v['weights_obj'] for v in self.hf_data.values()):
+                forecast += w_obj.calc_sum(qs, qe)*season_coeff
+
+            extr_lf_df = lf_df.loc[lf_df['Date'] < qe]
+            lf_coeffs = len(self.lf_coeffs)
+            forecast += np.sum( extr_lf_df['Value'].tail(lf_coeffs).tolist() * self.lf_coeffs )
+            self.forecast_result['forecast'].loc[len(self.forecast_result['forecast'])] = [qe, forecast]
+        
+        return self.forecast_result['forecast']
